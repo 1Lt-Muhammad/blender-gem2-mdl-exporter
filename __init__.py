@@ -1,13 +1,13 @@
 bl_info = {
     "name": "GEM2 Engine PLY",
     "author": "1Lt. Muhammad",
-    "version": (0, 5, 0),
-    "blender": (4, 5, 4),
+    "version": (0, 6, 4),
+    "blender": (4, 3, 0),
     "location": "File > Import-Export",
     "description": "GEM2 Engine O PLY Files",
     "warning": "",
-    "doc_url": "",
-    "support": 'Community',
+    "doc_url": "None",
+    "support": 'OFFICIAL',
     "category": "Import-Export",
 }
 
@@ -48,9 +48,9 @@ class ExportGEM2PLY(bpy.types.Operator, ExportHelper):
         default=True,
     )
     use_mirror: BoolProperty(
-        name="Mirror Meshes",
-        description="Mirror meshes, used with negatively scaled bones",
-        default=False,
+        name="Mirror Model",
+        description="Flips x axis, as GEM2 is using a negative x scale",
+        default=True,
     )
 
 
@@ -60,7 +60,6 @@ class ExportGEM2PLY(bpy.types.Operator, ExportHelper):
         from . import ply_export
 
         if self.directory:
-            print(keywords)
             return ply_export.export(self.directory, self, **keywords)
 
 
