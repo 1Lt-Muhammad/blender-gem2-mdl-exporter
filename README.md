@@ -1,4 +1,4 @@
-This addon will allow you to export GEM2 game engine PLY, VOL, and MTL files. It also creates a simple MDL file (obstacles, areas, and animations aren't supported yet).
+This addon will allow you to export GEM2 game engine MDL, PLY, VOL, and MTL files (obstacles, areas, and animations aren't supported yet).
 
 The addon detect meshes and volumes automatically. Meshes can be used for both PLY and VOL.
 
