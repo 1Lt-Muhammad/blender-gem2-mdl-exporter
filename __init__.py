@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "GEM2 Engine PLY",
+    "name": "GEM2 Engine MDL",
     "author": "1Lt. Muhammad",
-    "version": (0, 6, 4),
+    "version": (0, 6, 5),
     "blender": (4, 3, 0),
     "location": "File > Import-Export",
-    "description": "GEM2 Engine O PLY Files",
+    "description": "GEM2 Engine O MDL Files",
     "warning": "",
     "doc_url": "None",
     "support": 'OFFICIAL',
@@ -13,8 +13,8 @@ bl_info = {
 
 if "bpy" in locals():
     import importlib
-    if "ply_export" in locals():
-        importlib.reload(ply_export)
+    if "mdl_export" in locals():
+        importlib.reload(mdl_export)
 
 import bpy
 from bpy.app.translations import pgettext_tip as tip_
@@ -29,10 +29,10 @@ from bpy_extras.io_utils import (
 )
 
 
-class ExportGEM2PLY(bpy.types.Operator, ExportHelper):
-    """Export a GEM2 Engine PLY file"""
-    bl_idname = "export_scene.gem2ply"
-    bl_label = "Export PLY"
+class ExportGEM2MDL(bpy.types.Operator, ExportHelper):
+    """Export a GEM2 Engine MDL file"""
+    bl_idname = "export_scene.gem2mdl"
+    bl_label = "Export MDL"
     bl_options = {'UNDO'}
 
     directory: StringProperty(
@@ -57,17 +57,17 @@ class ExportGEM2PLY(bpy.types.Operator, ExportHelper):
     def execute(self, context):
         keywords = self.as_keywords(ignore=("filter_glob", "directory", "ui_tab", "filepath", "files", "check_existing"))
 
-        from . import ply_export
+        from . import mdl_export
 
         if self.directory:
-            return ply_export.export(self.directory, self, **keywords)
+            return mdl_export.export(self.directory, self, **keywords)
 
 
-class IO_FH_gem2ply(bpy.types.FileHandler):
-    bl_idname = "IO_FH_gem2ply"
-    bl_label = "PLY"
-    bl_export_operator = "export_scene.gem2ply"
-    bl_file_extensions = ".ply"
+class IO_FH_gem2mdl(bpy.types.FileHandler):
+    bl_idname = "IO_FH_gem2mdl"
+    bl_label = "MDL"
+    bl_export_operator = "export_scene.gem2mdl"
+    bl_file_extensions = ".mdl"
 
     @classmethod
     def poll_drop(cls, context):
@@ -75,12 +75,12 @@ class IO_FH_gem2ply(bpy.types.FileHandler):
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportGEM2PLY.bl_idname, text="GEM2 Engine (.ply)")
+    self.layout.operator(ExportGEM2MDL.bl_idname, text="GEM2 Engine (.mdl)")
 
 
 classes = (
-    ExportGEM2PLY,
-    IO_FH_gem2ply,
+    ExportGEM2MDL,
+    IO_FH_gem2mdl,
 )
 
 
