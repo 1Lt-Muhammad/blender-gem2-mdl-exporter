@@ -1,12 +1,12 @@
 bl_info = {
     "name": "GEM2 Engine MDL",
     "author": "1Lt. Muhammad",
-    "version": (0, 6, 5),
+    "version": (0, 7, 0),
     "blender": (4, 3, 0),
     "location": "File > Import-Export",
     "description": "GEM2 Engine O MDL Files",
     "warning": "",
-    "doc_url": "None",
+    "doc_url": "https://github.com/1Lt-Muhammad/blender-gem2-mdl-exporter",
     "support": 'OFFICIAL',
     "category": "Import-Export",
 }
