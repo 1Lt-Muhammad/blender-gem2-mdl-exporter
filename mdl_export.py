@@ -8,7 +8,8 @@ from bpy.app.translations import pgettext_tip as tip_
 
 tab = '\t'
 
-# Pre-compiled struct packers for performance optimization during intensive binary writing loops
+# Pre-compiled struct packers for performance optimization during intensive binary writing loops.
+# Calling these directly is significantly faster than using struct.pack() inside a tight loop.
 pack_B = struct.Struct('B').pack
 pack_BBBB = struct.Struct('BBBB').pack
 pack_H = struct.Struct('H').pack
@@ -18,14 +19,15 @@ pack_f = struct.Struct('f').pack
 pack_ff = struct.Struct('ff').pack
 pack_fff = struct.Struct('fff').pack
 
-# Direct3D Flexible Vertex Format (FVF) flags defining the target engine's vertex memory layout
+# Direct3D Flexible Vertex Format (FVF) flags.
+# These tell the target engine's graphics API exactly how the vertex buffer is laid out in memory.
 D3DFVF_XYZ = 0x02
 D3DFVF_XYZB2 = 0x08
 D3DFVF_NORMAL = 0x10
 D3DFVF_TEX1 = 0x0100
 D3DFVF_LASTBETA_UBYTE4 = 0x1000
 
-# Engine-specific mesh bitflags for rendering pipeline features
+# Engine-specific mesh bitflags for the rendering pipeline (e.g., enabling lighting, skinning, or bump mapping).
 MESH_FLAG_LIGHT     = 0b100
 MESH_FLAG_SKINNED   = 0b10000
 MESH_FLAG_BUMP      = 0b100000000
@@ -33,8 +35,8 @@ MESH_FLAG_MATERIAL  = 0b10000000000
 MESH_FLAG_SUBSKIN   = 0b100000000000
 
 
-def add_ext(name, ext, remove=False):
-    # Safely enforces, swaps, or removes file extensions without duplicating dots.
+def ext(name, ext, remove=False):
+    """Safely enforces, swaps, or removes file extensions without duplicating dots."""
     if name.endswith(ext):
         return name[:name.rindex(ext)].replace('.', '') + ('' if remove else ext)
     return name.replace('.', '') + ('' if remove else ext)
@@ -43,20 +45,13 @@ def add_ext(name, ext, remove=False):
 def export(dir, operator, apply_unit_scale, use_mirror):
     try:
         unit_scale = 1
-        # Convert Blender's internal units to the specific scale expected by the target engine
+        # Convert Blender's internal units to the specific spatial scale expected by the target engine.
         if apply_unit_scale:
             if bpy.context.scene.unit_settings.system == 'METRIC':
                 unit_scale = bpy.context.scene.unit_settings.scale_length * 20
             elif bpy.context.scene.unit_settings.system == 'IMPERIAL':
                 unit_scale = bpy.context.scene.unit_settings.scale_length * 6.096
 
-        if use_mirror:
-            factor = Vector((-unit_scale, unit_scale, unit_scale))
-        else:
-            factor = Vector((-unit_scale, unit_scale, unit_scale))
-                
-        children_map = {}
-        hierarchy = []
         meshes = {}
         materials = set()
         volumes = []
@@ -64,11 +59,14 @@ def export(dir, operator, apply_unit_scale, use_mirror):
         lights = []
         camera = None
         
-        basename = add_ext(bpy.context.scene.name, '')
+        basename = ext(bpy.context.scene.name, '')
         
         # Create a dedicated subfolder based on the current Blender file's name.
-        # This keeps the exported assets (.mdl, .ply, .mtl, etc.) grouped and organized.
-        dir = path.join(dir, path.splitext(path.basename(bpy.data.filepath))[0])
+        # This prevents exported assets (.mdl, .ply, .mtl) from cluttering the target directory.
+        if bpy.data.filepath:
+            dir = path.join(dir, path.splitext(path.basename(bpy.data.filepath))[0])
+        else:
+            dir = path.join(dir, basename)
         makedirs(dir, exist_ok=True)
         
         # Generate the engine's primary definition file (.def) if it doesn't already exist.
@@ -81,75 +79,49 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     '}'
                 )
 
-        with open(path.join(dir, f'{basename}.mdl'), 'w', encoding='utf-8') as f:
-            # Initialize hierarchy map for all objects and bones
-            for obj in bpy.context.scene.objects:
-                children_map[obj] = []
-                if obj.pose:
-                    for bone in obj.pose.bones:
-                        children_map[bone] = []
-
-            # Rebuild hierarchy: Flattens Blender's split Object/Armature hierarchy into a unified skeleton tree.
-            for obj in bpy.context.scene.objects:
+        with open(path.join(dir, f'{basename}.mdl'), 'w', encoding='utf-8') as f:        
+            def write_properties(obj, level=1, pos=None, mirror=False):
+                """
+                Extracts and writes local transforms. 
+                Blender uses column-major matrices, but the target engine uses row-major matrices, 
+                so transposition is required before writing.
+                """
+                matrix = obj.matrix_world.copy()
+                if pos:
+                    matrix.translation = pos
                 if obj.parent:
-                    # The engine expects a continuous bone hierarchy. If an object is parented to a specific bone, 
-                    # we link it directly to that bone and skip the Armature object entirely.
-                    if obj.parent_type == 'BONE':
-                        children_map[obj.parent.pose.bones[obj.parent_bone]].append(obj)
-                    else:
-                        children_map[obj.parent].append(obj)
-                else:
-                    hierarchy.append(obj)
-                    
-                if obj.pose:
-                    for bone in obj.pose.bones:
-                        if bone.parent:
-                            children_map[bone.parent].append(bone)
-                        else:
-                            children_map[obj].append(bone)
-        
-            def write_properties(obj, level=1, pos=None):
-                # Extracts local transforms. The target engine uses row-major matrices, requiring transposition.
-                if type(obj) == bpy.types.PoseBone:
-                    matrix = obj.matrix.copy()
-                    if pos: 
-                        matrix.translation = pos
-                    if obj.parent: 
-                        matrix = obj.parent.matrix.inverted() @ matrix
-                else:
-                    matrix = obj.matrix_world.copy()
-                    if pos: 
-                        matrix.translation = pos
-                    if obj.parent: 
-                        matrix = obj.parent.matrix_world.inverted() @ matrix
+                    matrix = obj.parent.matrix_world.inverted() @ matrix
 
-                matrix.translation *= factor
+                matrix.translation *= unit_scale
+                
+                # Invert the Y-axis (or relevant axis depending on coordinate system) to handle mirroring
+                if use_mirror and not obj.parent:
+                    matrix[1].xyz *= -1
+
                 matrix = matrix.transposed()
                 
                 if matrix != Matrix():
                     if matrix[3] != Vector((0, 0, 0, 1)):
                         if matrix.to_3x3() != Matrix().to_3x3():
                             # Write full 3x4 transformation matrix (3x3 rotation + 1x3 translation)
-                            f.write(tab * level + f'{{matrix34\n')
+                            f.write(tab * level + '{matrix34\n')
                             for i in range(4):
-                                f.write(tab * (level + 1) + f'{matrix[i][0]:.7g}\t{matrix[i][1]:.7g}\t{matrix[i][2]:.7g}\n')
-                            f.write(tab * level + f'}}\n')
+                                f.write(tab * (level + 1) + '%.7g\t%.7g\t%.7g\n' % matrix[i][:3])
+                            f.write(tab * level + '}\n')
                         else:
                             # Optimization: Write translation only if rotation is identity
-                            f.write(tab * level + f'{{position {matrix[3][0]:.7g}\t{matrix[3][1]:.7g}\t{matrix[3][2]:.7g}}}\n')
+                            f.write(tab * level + '{position %.7g\t%.7g\t%.7g}\n' % matrix[3][:3])
                     else:
                         # Optimization: Write rotation only if translation is zero
-                        f.write(tab * level + f'{{orientation\n')
+                        f.write(tab * level + '{orientation\n')
                         for i in range(3):
-                            f.write(tab * (level + 1) + f'{matrix[i][0]:.7g}\t{matrix[i][1]:.7g}\t{matrix[i][2]:.7g}\n')
-                        f.write(tab * level + f'}}\n')
+                            f.write(tab * (level + 1) + '%.7g\t%.7g\t%.7g\n' % matrix[i][:3])
+                        f.write(tab * level + '}\n')
 
             def get_children(obj, level=1):
-                if type(obj) == bpy.types.PoseBone:
-                    obj_type = bpy.types.PoseBone
-                else:
-                    obj_type = type(obj.data)
-                    
+                """Recursively builds the scene graph structure required by the .mdl format."""
+                obj_type = type(obj.data)
+                
                 if obj_type == bpy.types.Camera:
                     camera = obj
                 elif obj_type == bpy.types.PointLight:
@@ -163,59 +135,73 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                         meshes[obj.data]['obj'] = obj
                     meshes[obj.data]['volume'] = True
                 else:
-                    f.write(tab * level + f'{{bone "{add_ext(obj.name, "")}"\n')
-                    write_properties(obj, level + 1)
-                    
-                    if obj_type == bpy.types.Mesh:
-                        meshes.setdefault(obj.data, {'obj': None, 'mesh': False, 'volume': False})
-                        meshes[obj.data]['mesh'] = True
-                        if obj.vertex_groups or not meshes[obj.data]['obj']:
-                            meshes[obj.data]['obj'] = obj
-                        f.write(tab * (level + 1) + f'{{VolumeView "{add_ext(obj.data.name, ".ply")}"}}\n')
+                    if obj.pose:
+                        for child in obj.children:
+                            get_children(child, level)
+                    else:
+                        f.write(tab * level + f'{{bone "{ext(obj.name, "")}"\n')
+                        write_properties(obj, level + 1)
                         
-                    for child in children_map[obj]:
-                        get_children(child, level + 1)
-                    f.write(tab * level + f'}}\n')
+                        if obj_type == bpy.types.Mesh:
+                            meshes.setdefault(obj.data, {'obj': None, 'mesh': False, 'volume': False})
+                            meshes[obj.data]['mesh'] = True
+                            if obj.vertex_groups or not meshes[obj.data]['obj']:
+                                meshes[obj.data]['obj'] = obj
+                            f.write(tab * (level + 1) + f'{{VolumeView "{ext(obj.data.name, ".ply")}"}}\n')
+                        
+                        for child in obj.children:
+                            get_children(child, level + 1)
+                        f.write(tab * level + f'}}\n')
 
             # --- Start MDL Scene Graph ---
             f.write('{Skeleton\n')
-            for obj in hierarchy:
-                get_children(obj)
+            # Only start tree traversal from absolute root objects to prevent double-writing children
+            for obj in bpy.context.scene.objects:
+                if not obj.parent:
+                    get_children(obj)
             f.write('}')
 
-            # Write basic primitive collision shapes (sphere, cylinder, box) to the .mdl
+            # --- Write basic primitive collision shapes (sphere, cylinder, box) ---
             for obj in volumes:
-                f.write(f'\n{{volume "{add_ext(obj.name, ".vol", remove=True)}"\n')
+                f.write(f'\n{{volume "{ext(obj.name, ".vol", remove=True)}"\n')
                 if 'volume' in obj.data.keys():
-                    vol_type = str(obj.data['volume']).lower()
-                    dims = Vector(obj.bound_box[6]) - Vector(obj.bound_box[0])
+                    vol_type = str(obj.data['volume'])
+                    dims = (Vector(obj.bound_box[6]) - Vector(obj.bound_box[0])) * unit_scale
+                    
                     if vol_type in ('1', 'sphere'):
-                        f.write(f'\t{{sphere {max(dims)/2*unit_scale:.7g}}}\n')
+                        f.write('\t{sphere %.7g}\n' % (max(dims)/2))
                     elif vol_type in ('2', 'cylinder'):
-                        f.write(f'\t{{cylinder {max(dims[0:2])/2:.7g}\t{dims[2]:.7g}}}\n')
+                        f.write('\t{cylinder %.7g\t%.7g}\n' % (max(dims[:2])/2, dims[2]))
                     elif vol_type in ('3', 'box'):
-                        f.write(f'\t{{box {dims[0]*unit_scale:.7g}\t{dims[1]*unit_scale:.7g}\t{dims[2]*unit_scale:.7g}}}\n')
+                        f.write('\t{box %.7g\t%.7g\t%.7g}\n' % tuple(dims))
                     
                     # Blender pivot points can be arbitrary, but the engine generates primitives strictly from 
                     # their geometric center. We calculate the true center here and override the position.
                     pos = Vector(obj.location) + Vector(obj.bound_box[0]) + (Vector(obj.bound_box[6]) - Vector(obj.bound_box[0])) / 2
                     write_properties(obj, pos=pos)
                 else:
-                    f.write(f'\t{{polyhedron "{add_ext(obj.data.name, ".vol")}"}}\n')
+                    # Custom collision geometry fallback
+                    f.write(f'\t{{polyhedron "{ext(obj.data.name, ".vol")}"}}\n')
                     write_properties(obj)
-                f.write(f'\t{{bone "{add_ext(obj.parent.name, "")}"}}\n')
+                f.write(f'\t{{bone "{ext(obj.parent.name, "")}"}}\n')
                 f.write('}')
 
-        # --- Binary Geometry Export Phase ---
+        # --- Binary Geometry Export Phase (.vol and .ply) ---
         for mesh in meshes:
+            # Force Blender to calculate necessary geometric data before accessing it
+            mesh.calc_loop_triangles()
+            mesh.calc_smooth_groups()
+            mesh.calc_tangents()
+            
             loop_tris = mesh.loop_triangles
             edges_count = len(loop_tris) * 3
+            
             # Limit enforced by standard 16-bit unsigned integer index buffers
             if edges_count > 0xffff: 
                 raise Exception(f"Mesh '{mesh.name}'s edges count ({edges_count}) exceeds the limit {0xffff}")
 
             vertices = mesh.vertices
-            coords = [vertex.co * factor for vertex in vertices]
+            coords = [vertex.co * unit_scale for vertex in vertices]
 
             # Binary Export: Custom polyhedron collision geometry (EVLM format)
             if meshes[mesh]['volume']:
@@ -226,7 +212,7 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     if vertices_count > 0xffff: 
                         raise Exception(f"Mesh '{mesh.name}''s vertices count ({vertices_count}) exceeds the limit {0xffff}")
 
-                    with open(path.join(dir, add_ext(mesh.name, '.vol')), 'w+b') as f:
+                    with open(path.join(dir, ext(mesh.name, '.vol')), 'w+b') as f:
                         f.write(b'EVLM') 
                         f.write(b'VERT')
                         f.write(pack_I(vertices_count))
@@ -241,7 +227,7 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                         f.write(b'SIDE')
                         f.write(pack_I(edges_count // 3))
                         for tri in loop_tris:
-                            # Material index acts as collision face properties ID
+                            # Material index acts as collision face properties ID for the physics engine
                             f.write(pack_B(tri.material_index + 1)) 
 
             # Binary Export: Visual render geometry (EPLY format)
@@ -257,11 +243,12 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                 obj = meshes[mesh]['obj']
                 bones_count = len(obj.vertex_groups)
                 has_skin = bool(bones_count)
-                # Max 254 vertex groups supported due to 8-bit bone indexing limits in the shader
+                
+                # Max 254 vertex groups supported due to 8-bit bone indexing limits in the hardware shader
                 if bones_count > 0xfe: 
                     raise Exception(f"Mesh '{mesh.name}'s vertex groups count ({bones_count}) exceeds the limit {0xfe}")
 
-                with open(path.join(dir, add_ext(mesh.name, '.ply')), 'w+b') as f:
+                with open(path.join(dir, ext(mesh.name, '.ply')), 'w+b') as f:
                     f.write(b'EPLY')
 
                     f.write(b'BNDS')
@@ -271,14 +258,14 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     weights_count = 0
                     if has_skin:
                         f.write(b'SKIN')
-                        weights_count = 2  # Engine assumes max 2 blend weights per vertex
+                        weights_count = 2  # Engine architecture limits blending to max 2 weights per vertex
                         f.write(pack_I(bones_count))
                         for bone in obj.vertex_groups:
                             f.write(pack_B(len(bone.name)))
                             f.write(bone.name.encode())
 
                     tri_start = 0
-                    # Group triangles by material to construct contiguous draw calls/sub-meshes
+                    # Group triangles by material to construct contiguous draw calls/sub-meshes for the renderer
                     tris_by_mat_list = [[] for _ in mesh.materials]
                     for tri in loop_tris:
                         tris_by_mat_list[tri.material_index].append(tri)
@@ -286,7 +273,7 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     # Submesh Definition Header Block
                     for i in range(len(tris_by_mat_list)):
                         f.write(b'MESH')
-                        # Combine FVF flags to define the vertex memory layout for this subset
+                        # Combine FVF flags to define the specific vertex memory layout for this subset
                         f.write(pack_I(D3DFVF_NORMAL | D3DFVF_TEX1 | ((D3DFVF_XYZB2 | D3DFVF_LASTBETA_UBYTE4) if has_skin else D3DFVF_XYZ)))
                         f.write(pack_I(tri_start))
                         
@@ -304,11 +291,12 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                         
                         # Register material for .mtl generation later
                         materials.add(mesh.materials[i])
-                        material_name = add_ext(material_name, '.mtl')
+                        material_name = ext(material_name, '.mtl')
                         
                         f.write(pack_B(len(material_name)))
                         f.write((material_name).encode())
                         if has_skin:
+                            # Define the local bone palette mapping for this specific submesh
                             f.write(pack_H(bones_count + 1))
                             f.write(struct.pack('B' * bones_count, *(i + 1 for i in range(bones_count))))
 
@@ -336,7 +324,7 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                             # memory alignment, so we pad it to length 4 even though we only use 2 weights.
                             weights_list.extend([(0, 0)] * (4 - len(weights_list)))
                             
-                            # Normalize weights so the top two always equal 1.0 (prevents mesh distortion)
+                            # Normalize weights so the top two always equal 1.0 to prevent mesh tearing/distortion
                             try:
                                 inv = 1 / (weights_list[0][0] + weights_list[1][0])
                             except:
@@ -346,7 +334,9 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                             
                         f.write(pack_fff(*loop.normal))
                         uv = uvs[loop.index]
-                        # 1-uv[1] flips the V coordinate from Blender's OpenGL space (bottom-left) to DirectX space (top-left)
+                        
+                        # 1-uv[1] flips the V coordinate from Blender's OpenGL space (bottom-left origin) 
+                        # to DirectX space (top-left origin).
                         f.write(pack_ff(uv[0], 1 - uv[1]))
                         f.write(pack_fff(*loop.tangent))
                         f.write(pack_f(loop.bitangent_sign))
@@ -362,24 +352,51 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                             else:
                                 f.write(pack_HHH(*tri.loops))
         
-        # --- Write Material (.mtl) and Texture Lists (.txt) ---
+        # --- Write Material (.mtl) and Texture Parsing ---
+        def get_tex(node, tex):
+            """Helper function to trace node links and extract the assigned image texture filename."""
+            if node.inputs[tex].links:
+                node = node.inputs[tex].links[0].from_node
+                if node.type == 'TEX_IMAGE':
+                    if node.image:
+                        return node.image.name
+            return ''
+        
+        # Maps engine material slots to standard Blender Principled BSDF inputs
+        check_map = {
+            'diffuse': 'Base Color',
+            'bump': 'Normal',
+            'specular': 'Specular IOR Level',
+        }
+        
         for mtl in materials:
-            with open(path.join(dir, add_ext(mtl.name, '.mtl')), 'w', encoding='utf-8') as f:
+            with open(path.join(dir, ext(mtl.name, '.mtl')), 'w', encoding='utf-8') as f:
                 f.write('{material bump\n')
-                f.write(f'\t{{diffuse "{add_ext(mtl.name, "")}"}}\n')
-                f.write(f'\t{{bump "{add_ext(mtl.name, "_bp")}"}}\n')
-                f.write(f'\t{{specular "{add_ext(mtl.name, "_sp")}"}}\n')
-                f.write('\t{color "255 255 255 25"}\n')
-                f.write('\t{blend test}\n')
-                f.write('}')
-            
-            # Extract the original image filenames used in the Blender material's node tree.
-            # This helper .txt file is incredibly useful for batch converting or tracking external assets.
-            with open(path.join(dir, add_ext(mtl.name, '.txt')), 'w', encoding='utf-8') as f:
+
+                # Find the primary material output node
                 for node in mtl.node_tree.nodes:
-                    if node.type == 'TEX_IMAGE':
-                        if node.image:
-                            f.write(f'{path.splitext(path.basename(node.image.name))[0]}\n')
+                    if node.type == 'OUTPUT_MATERIAL':
+                        break
+
+                if node.inputs['Surface'].links:
+                    node = node.inputs['Surface'].links[0].from_node
+                    
+                    # Trace connections backwards from the principled shader to find attached textures
+                    for tex in check_map:
+                        image = get_tex(node, check_map[tex])
+                        if image:
+                            f.write('\t{%s "%s"}\n' % (tex, path.splitext(image)[0]))
+                    
+                else:
+                    # Fallback string generation if no node setup is attached
+                    f.write('\t{diffuse "%s"}\n' % mtl.name)
+                    f.write('\t{bump "%s_bp"}\n' % mtl.name)
+                    f.write('\t{specular "%s_sp"}\n' % mtl.name)
+                    
+                color = Vector(node.inputs['Specular Tint'].default_value) * 255
+                f.write('\t{color "%d %d %d %d"}\n' % tuple(color))
+                f.write('\t{blend none}\n')
+                f.write('}')
         
         return {'FINISHED'}
 
