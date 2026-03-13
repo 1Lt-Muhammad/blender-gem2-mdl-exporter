@@ -1,7 +1,7 @@
 bl_info = {
     "name": "GEM2 Engine MDL",
     "author": "1Lt. Muhammad",
-    "version": (0, 7, 0),
+    "version": (0, 7, 2),
     "blender": (4, 3, 0),
     "location": "File > Import-Export",
     "description": "GEM2 Engine O MDL Files",
@@ -22,13 +22,15 @@ from bpy.props import (
     StringProperty,
     BoolProperty,
     CollectionProperty,
+    orientation_helper,
+    axis_conversion,
 )
 from bpy_extras.io_utils import (
     ExportHelper,
     poll_file_object_drop,
 )
 
-
+@orientation_helper(axis_forward='X', axis_up='Z')
 class ExportGEM2MDL(bpy.types.Operator, ExportHelper):
     """Export a GEM2 Engine MDL file"""
     bl_idname = "export_scene.gem2mdl"
@@ -49,13 +51,23 @@ class ExportGEM2MDL(bpy.types.Operator, ExportHelper):
     )
     use_mirror: BoolProperty(
         name="Mirror Model",
-        description="Flips x axis, as GEM2 is using a negative x scale",
-        default=True,
+        description="Mirror the model Y axis, export mirrored meshes",
+        default=False,
     )
 
 
     def execute(self, context):
-        keywords = self.as_keywords(ignore=("filter_glob", "directory", "ui_tab", "filepath", "files", "check_existing"))
+        global_matrix = axis_conversion(
+                                         from_forward=self.axis_forward,
+                                         from_up=self.axis_up,
+                                         to_forward='X',
+                                         to_up='Z',
+                                         ).to_4x4()
+        global_matrix = global_matrix.Scale(self.use_mirror*2-1, 4, (0, 1, 0)) @ global_matrix
+
+        keywords = self.as_keywords(ignore=("filter_glob", "directory", "ui_tab", "filepath", "files", "check_existing", "axis_forward", "axis_up", "use_mirror"))
+
+        keywords["global_matrix"] = global_matrix
 
         from . import mdl_export
 
