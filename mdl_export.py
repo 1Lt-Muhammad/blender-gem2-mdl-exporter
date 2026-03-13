@@ -1,6 +1,7 @@
 import struct
-import heapq
+from heapq import nlargest
 from os import path, makedirs
+from shutil import copyfile
 
 import bpy
 from mathutils import Matrix, Vector
@@ -42,7 +43,7 @@ def ext(name, ext, remove=False):
     return name.replace('.', '') + ('' if remove else ext)
 
 
-def export(dir, operator, apply_unit_scale, use_mirror):
+def export(dir, operator, apply_unit_scale, global_matrix):
     try:
         unit_scale = 1
         # Convert Blender's internal units to the specific spatial scale expected by the target engine.
@@ -52,6 +53,8 @@ def export(dir, operator, apply_unit_scale, use_mirror):
             elif bpy.context.scene.unit_settings.system == 'IMPERIAL':
                 unit_scale = bpy.context.scene.unit_settings.scale_length * 6.096
 
+        use_mirror = global_matrix.determinant() == -1
+
         meshes = {}
         materials = set()
         volumes = []
@@ -59,14 +62,14 @@ def export(dir, operator, apply_unit_scale, use_mirror):
         lights = []
         camera = None
         
-        basename = ext(bpy.context.scene.name, '')
-        
         # Create a dedicated subfolder based on the current Blender file's name.
         # This prevents exported assets (.mdl, .ply, .mtl) from cluttering the target directory.
         if bpy.data.filepath:
-            dir = path.join(dir, path.splitext(path.basename(bpy.data.filepath))[0])
+            basename = path.splitext(path.basename(bpy.data.filepath))[0]
         else:
-            dir = path.join(dir, basename)
+            basename = ext(bpy.context.scene.name, '')
+
+        dir = path.join(dir, basename)
         makedirs(dir, exist_ok=True)
         
         # Generate the engine's primary definition file (.def) if it doesn't already exist.
@@ -91,13 +94,10 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     matrix.translation = pos
                 if obj.parent:
                     matrix = obj.parent.matrix_world.inverted() @ matrix
+                else:
+                    matrix = global_matrix @ matrix
 
                 matrix.translation *= unit_scale
-                
-                # Invert the Y-axis (or relevant axis depending on coordinate system) to handle mirroring
-                if use_mirror and not obj.parent:
-                    matrix[1].xyz *= -1
-
                 matrix = matrix.transposed()
                 
                 if matrix != Matrix():
@@ -311,7 +311,7 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     if has_skin:
                         # Extract only the two strongest bone weights per vertex (engine hardware limit)
                         vertex_weights = [
-                            [(g.weight, g.group + 1) for g in heapq.nlargest(2, vertex.groups, key=lambda g: g.weight)]
+                            [(g.weight, g.group + 1) for g in nlargest(2, vertex.groups, key=lambda g: g.weight)]
                             for vertex in vertices
                         ]
 
@@ -359,7 +359,7 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                 node = node.inputs[tex].links[0].from_node
                 if node.type == 'TEX_IMAGE':
                     if node.image:
-                        return node.image.name
+                        return node.image
             return ''
         
         # Maps engine material slots to standard Blender Principled BSDF inputs
@@ -385,7 +385,15 @@ def export(dir, operator, apply_unit_scale, use_mirror):
                     for tex in check_map:
                         image = get_tex(node, check_map[tex])
                         if image:
-                            f.write('\t{%s "%s"}\n' % (tex, path.splitext(image)[0]))
+                            f.write('\t{%s "%s"}\n' % (tex, path.splitext(image.name)[0]))
+                            if image.packed_file:
+                                with open(path.join(dir, image.name), 'wb') as pf:
+                                    pf.write(image.packed_file.data)
+                            else:
+                                if path.isfile(image.filepath):
+                                    copyfile(image.filepath, path.join(dir, image.name))
+                                else:
+                                    raise Exception(f"Image file '{image.filepath}' couldn't be found")
                     
                 else:
                     # Fallback string generation if no node setup is attached
