@@ -252,8 +252,8 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                     f.write(b'EPLY')
 
                     f.write(b'BNDS')
-                    f.write(pack_fff(*obj.bound_box[0]))
-                    f.write(pack_fff(*obj.bound_box[6]))
+                    f.write(pack_fff(*Vector(obj.bound_box[0])*unit_scale))
+                    f.write(pack_fff(*Vector(obj.bound_box[6])*unit_scale))
 
                     weights_count = 0
                     if has_skin:
@@ -393,7 +393,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                                 if path.isfile(image.filepath):
                                     copyfile(image.filepath, path.join(dir, image.name))
                                 else:
-                                    raise Exception(f"Image file '{image.filepath}' couldn't be found")
+                                    operator.report({'WARNING'}, tip_(f"Image file '{image.filepath}' couldn't be found"))
                     
                 else:
                     # Fallback string generation if no node setup is attached
