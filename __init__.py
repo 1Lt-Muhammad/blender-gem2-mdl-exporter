@@ -1,7 +1,7 @@
 bl_info = {
     "name": "GEM2 Engine MDL",
     "author": "1Lt. Muhammad",
-    "version": (0, 7, 2),
+    "version": (0, 7, 3),
     "blender": (4, 3, 0),
     "location": "File > Import-Export",
     "description": "GEM2 Engine O MDL Files",
