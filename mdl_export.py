@@ -339,7 +339,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                         # to DirectX space (top-left origin).
                         f.write(pack_ff(uv[0], 1 - uv[1]))
                         f.write(pack_fff(*loop.tangent))
-                        f.write(pack_f(loop.bitangent_sign))
+                        f.write(pack_f(-1*loop.bitangent_sign))
 
                     # Index Buffer Block
                     f.write(b'INDX')
