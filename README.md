@@ -2,7 +2,11 @@ This addon will allow you to export GEM2 game engine MDL, PLY, VOL, and MTL file
 
 The addon detects meshes and volumes automatically. Meshes can be used for both PLY and VOL exports.
 
+To export obstacles, use curves. To export a primitive shape, you need to add 'obstacle' as a custom property to the mesh data (not object). The obstacle value can be an integer (1, 2) or a string (circle, rectangule). For polygon, use any value other than the previous. For Areas, use 'area' instead of 'obstacle'.
+
 To export VOL files, just make sure the object name ends in '.vol'. To export primitive VOL files, you need to add 'volume' as a custom property to the mesh data (not object). The volume value can be an integer (1, 2, or 3) or a string (sphere, cylinder, or box).
+
+To export stuff previews, use cameras and light inside collections. The collection name will be the preview name.
 
 The addon now export MTL files. However, you need to copy your textures manually to the folder. You may need to modify MTL files.
 
