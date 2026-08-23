@@ -1,4 +1,4 @@
-import struct
+import struct, math
 from heapq import nlargest
 from os import path, makedirs
 from shutil import copyfile
@@ -59,6 +59,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
         materials = set()
         volumes = []
         obstacles = []
+        previews = {}
         lights = []
         camera = None
         
@@ -76,11 +77,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
         # This file registers the asset as a game entity and links it to the main .mdl skeleton.
         if not path.isfile(path.join(dir, f'{basename}.def')):
             with open(path.join(dir, f'{basename}.def'), 'w', encoding='utf-8') as f:
-                f.write(
-                    '{game_entity\n'
-                    f'\t{{extension "{basename}.mdl"}}\n'
-                    '}'
-                )
+                f.write('{game_entity\n\t{extension "%s.mdl"}\n}' % basename)
 
         with open(path.join(dir, f'{basename}.mdl'), 'w', encoding='utf-8') as f:        
             def write_properties(obj, level=1, pos=None, mirror=False):
@@ -104,29 +101,33 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                     if matrix[3] != Vector((0, 0, 0, 1)):
                         if matrix.to_3x3() != Matrix().to_3x3():
                             # Write full 3x4 transformation matrix (3x3 rotation + 1x3 translation)
-                            f.write(tab * level + '{matrix34\n')
+                            f.write(tab * level + '{Matrix34\n')
                             for i in range(4):
                                 f.write(tab * (level + 1) + '%.7g\t%.7g\t%.7g\n' % matrix[i][:3])
                             f.write(tab * level + '}\n')
                         else:
                             # Optimization: Write translation only if rotation is identity
-                            f.write(tab * level + '{position %.7g\t%.7g\t%.7g}\n' % matrix[3][:3])
+                            f.write(tab * level + '{Position %.7g\t%.7g\t%.7g}\n' % matrix[3][:3])
                     else:
                         # Optimization: Write rotation only if translation is zero
-                        f.write(tab * level + '{orientation\n')
+                        f.write(tab * level + '{Orientation\n')
                         for i in range(3):
                             f.write(tab * (level + 1) + '%.7g\t%.7g\t%.7g\n' % matrix[i][:3])
                         f.write(tab * level + '}\n')
 
             def get_children(obj, level=1):
-                """Recursively builds the scene graph structure required by the .mdl format."""
-                obj_type = type(obj.data)
-                
-                if obj_type == bpy.types.Camera:
-                    camera = obj
-                elif obj_type == bpy.types.PointLight:
-                    lights.append(obj)
-                elif obj.name.endswith('.vol'):
+                """Recursively builds the scene graph structure required by the .mdl format."""                
+                if obj.type == 'CAMERA':
+                    for preview in obj.users_collection:
+                        previews.setdefault(preview.name, {'camera': None, 'lights': set()})
+                        previews[preview.name]['camera'] = obj
+                elif obj.type == 'LIGHT':
+                    for preview in obj.users_collection:
+                        previews.setdefault(preview.name, {'camera': None, 'lights': set()})
+                        previews[preview.name]['lights'].add(obj)
+                elif obj.type == 'CURVE':
+                    obstacles.append(obj)
+                elif obj.name.endswith('.vol') and obj.type == 'MESH':
                     volumes.append(obj)
                     # A single mesh data block might be shared between a visual object and a collision volume.
                     # We register it here and track flags to ensure it gets exported correctly for both uses.
@@ -139,15 +140,34 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                         for child in obj.children:
                             get_children(child, level)
                     else:
-                        f.write(tab * level + f'{{bone "{ext(obj.name, "")}"\n')
+                        f.write(tab * level + '{bone "%s"\n' % ext(obj.name, ""))
+                        parameters = ''
+                        for key in obj.keys():
+                            parameters += key
+                            if obj[key]:
+                                parameters += '=' + obj[key]
+                            parameters += ';'
+                        if parameters:
+                            f.write(tab * (level + 1) + '{parameters "%s"}\n' % parameters)
+
                         write_properties(obj, level + 1)
                         
-                        if obj_type == bpy.types.Mesh:
+                        if obj.type == 'MESH':
                             meshes.setdefault(obj.data, {'obj': None, 'mesh': False, 'volume': False})
                             meshes[obj.data]['mesh'] = True
                             if obj.vertex_groups or not meshes[obj.data]['obj']:
                                 meshes[obj.data]['obj'] = obj
-                            f.write(tab * (level + 1) + f'{{VolumeView "{ext(obj.data.name, ".ply")}"}}\n')
+                            f.write(tab * (level + 1) + '{VolumeView "%s"' % ext(obj.data.name, ".ply"))
+                            parameters = ''
+                            for key in obj.data.keys():
+                                if key != 'volume':
+                                    parameters += '\n%s{%s' % (tab * (level + 2), key)
+                                    if obj.data[key]:
+                                        parameters += ' ' + obj.data[key]
+                                    parameters += '}'
+                            if parameters:
+                                f.write('%s\n%s' % (parameters, tab * (level + 1)))
+                            f.write('}\n')
                         
                         for child in obj.children:
                             get_children(child, level + 1)
@@ -159,21 +179,61 @@ def export(dir, operator, apply_unit_scale, global_matrix):
             for obj in bpy.context.scene.objects:
                 if not obj.parent:
                     get_children(obj)
-            f.write('}')
+            f.write('}\n')
+
+            # --- Obstacles ---
+            for obj in obstacles:
+                obs_type = None
+                if 'obstacle' in obj.data.keys():
+                    f.write('{Obstacle "%s"\n' % obj.name)
+                    obs_type = str(obj.data['obstacle'])
+                    print(obs_type)
+                elif 'area' in obj.data.keys():
+                    f.write('{Area "%s"\n' % obj.name)
+                    obs_type = str(obj.data['area'])
+                else:
+                    f.write('{Obstacle "%s"\n' % obj.name)
+                dims = ((Vector(obj.bound_box[6]) - Vector(obj.bound_box[0])) * unit_scale)[:2]
+                matrix = obj.matrix_world.copy()
+                matrix = global_matrix @ matrix
+                matrix.translation *= unit_scale
+                if obs_type in ('1', 'circle'):
+                    f.write('\t{Circle2\n')
+                    if matrix.translation[:2] != (0, 0):
+                        f.write('\t\t{Center %.7g\t%.7g}\n' % matrix.translation[:2])
+                    f.write('\t\t{Radius %.7g}\n' % (max(obj.dimensions[:2])/2))
+                    f.write('\t}\n')
+                elif obs_type in ('2', 'rectangule'):
+                    f.write('\t{Obb2\n')
+                    if matrix.translation[:2] != (0, 0):
+                        f.write('\t\t{Center %.7g\t%.7g}\n' % matrix.translation[:2])
+                    f.write('\t\t{Extent %.7g\t%.7g}\n' % obj.dimensions[:2])
+                    axis = tuple(matrix.normalized().to_2x2().row[0])
+                    if axis != (1,0):
+                        f.write('\t\t{Axis %.7g\t%.7g}\n' % axis)
+                    f.write('\t}\n')
+                else:
+                    f.write('\t{Polygon2\n')
+                    for spline in obj.data.splines:
+                        for point in spline.bezier_points:
+                            f.write('\t\t{Vertex %.7g\t%.7g}\n' % (matrix @ (point.co * unit_scale))[:2])
+                    f.write('\t}\n')
+                f.write('\t{Rotate}\n')
+                f.write('}\n')
 
             # --- Write basic primitive collision shapes (sphere, cylinder, box) ---
             for obj in volumes:
-                f.write(f'\n{{volume "{ext(obj.name, ".vol", remove=True)}"\n')
+                f.write('{Volume "%s"\n' % ext(obj.name, ".vol", remove=True))
                 if 'volume' in obj.data.keys():
                     vol_type = str(obj.data['volume'])
                     dims = (Vector(obj.bound_box[6]) - Vector(obj.bound_box[0])) * unit_scale
                     
                     if vol_type in ('1', 'sphere'):
-                        f.write('\t{sphere %.7g}\n' % (max(dims)/2))
+                        f.write('\t{Sphere %.7g}\n' % (max(dims)/2))
                     elif vol_type in ('2', 'cylinder'):
-                        f.write('\t{cylinder %.7g\t%.7g}\n' % (max(dims[:2])/2, dims[2]))
+                        f.write('\t{Cylinder %.7g\t%.7g}\n' % (max(dims[:2])/2, dims[2]))
                     elif vol_type in ('3', 'box'):
-                        f.write('\t{box %.7g\t%.7g\t%.7g}\n' % tuple(dims))
+                        f.write('\t{Box %.7g\t%.7g\t%.7g}\n' % tuple(dims))
                     
                     # Blender pivot points can be arbitrary, but the engine generates primitives strictly from 
                     # their geometric center. We calculate the true center here and override the position.
@@ -181,10 +241,57 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                     write_properties(obj, pos=pos)
                 else:
                     # Custom collision geometry fallback
-                    f.write(f'\t{{polyhedron "{ext(obj.data.name, ".vol")}"}}\n')
+                    f.write('\t{Polyhedron "%s"}\n' % ext(obj.data.name, ".vol"))
                     write_properties(obj)
-                f.write(f'\t{{bone "{ext(obj.parent.name, "")}"}}\n')
-                f.write('}')
+                f.write('\t{Bone "%s"}\n' % ext(obj.parent.name, ""))
+                f.write('}\n')
+
+            # --- Preview extender ---
+            f.write('{Extender "preview"\n')
+            for preview in previews:
+                f.write('\t{"%s"\n' % preview)
+                
+                camera = previews[preview]['camera']
+                
+                if camera:
+                    f.write('\t\t{camera\n')
+
+                    matrix = camera.matrix_world.copy()
+                    matrix = global_matrix @ matrix
+                    matrix.translation *= unit_scale
+                    lookat = matrix.translation + matrix.to_3x3() @ Vector((0, 0, -1))
+                    
+                    f.write('\t\t\t{origin %.7g\t%.7g\t%.7g}\n' % tuple(matrix.translation))
+                    f.write('\t\t\t{lookat %.7g\t%.7g\t%.7g}\n' % tuple(lookat))
+                    f.write('\t\t\t{fov %.7g}\n' % math.degrees(camera.data.angle))
+                    cam_right = matrix.to_3x3() @ Vector((-1, 0, 0))
+                    cam_up = matrix.to_3x3() @ Vector((0, 1, 0))
+                    sin_roll = cam_right.z
+                    horizon = math.degrees(math.atan2(cam_right.z, cam_up.z))
+                    if horizon != 0:
+                        f.write('\t\t\t{horizon %.7g}\n' % horizon)
+                    f.write('\t\t}\n')
+                if previews[preview]['lights']:
+                    f.write('\t\t{lights\n')
+                    for light in previews[preview]['lights']:
+                        f.write('\t\t\t{"%s"\n' % light.name)
+
+                        matrix = light.matrix_world.copy()
+                        matrix = global_matrix @ matrix
+                        matrix.translation *= unit_scale
+                        if light.data.type == "POINT":
+                            f.write('\t\t\t\t{type point}\n')
+                            f.write('\t\t\t\t{position %.7g\t%.7g\t%.7g}\n' % tuple(matrix.translation))
+                        else:
+                            f.write('\t\t\t\t{type directional}\n')
+                            direction = matrix.to_3x3() @ Vector((0, 0, -1))
+                            f.write('\t\t\t\t{direction %.7g\t%.7g\t%.7g}\n' % tuple(direction))
+                        if tuple(light.data.color) != (1,1,1):
+                            f.write('\t\t\t\t{diffuse 0x%.02x%.02x%.02x}\n' % tuple(map(int, light.data.color*255)))
+                        f.write('\t\t\t}\n')
+                    f.write('\t\t}\n')
+                f.write('\t}\n')
+            f.write('}\n')
 
         # --- Binary Geometry Export Phase (.vol and .ply) ---
         for mesh in meshes:
