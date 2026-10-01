@@ -21,7 +21,7 @@ pack_ff = struct.Struct('ff').pack
 pack_fff = struct.Struct('fff').pack
 
 # Direct3D Flexible Vertex Format (FVF) flags.
-# These tell the target engine's graphics API exactly how the vertex buffer is laid out in memory.
+# These tell the target engine graphics API exactly how the vertex buffer is laid out in memory.
 D3DFVF_XYZ = 0x02
 D3DFVF_XYZB2 = 0x08
 D3DFVF_NORMAL = 0x10
@@ -46,7 +46,7 @@ def ext(name, ext, remove=False):
 def export(dir, operator, apply_unit_scale, global_matrix):
     try:
         unit_scale = 1
-        # Convert Blender's internal units to the specific spatial scale expected by the target engine.
+        # Convert Blender internal units to the specific spatial scale expected by the target engine.
         if apply_unit_scale:
             if bpy.context.scene.unit_settings.system == 'METRIC':
                 unit_scale = bpy.context.scene.unit_settings.scale_length * 20
@@ -63,7 +63,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
         lights = []
         camera = None
         
-        # Create a dedicated subfolder based on the current Blender file's name.
+        # Create a dedicated subfolder based on the current Blender file name.
         # This prevents exported assets (.mdl, .ply, .mtl) from cluttering the target directory.
         if bpy.data.filepath:
             basename = path.splitext(path.basename(bpy.data.filepath))[0]
@@ -73,7 +73,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
         dir = path.join(dir, basename)
         makedirs(dir, exist_ok=True)
         
-        # Generate the engine's primary definition file (.def) if it doesn't already exist.
+        # Generate the engine primary definition file (.def) if it doesn't already exist.
         # This file registers the asset as a game entity and links it to the main .mdl skeleton.
         if not path.isfile(path.join(dir, f'{basename}.def')):
             with open(path.join(dir, f'{basename}.def'), 'w', encoding='utf-8') as f:
@@ -142,10 +142,12 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                     else:
                         f.write(tab * level + '{bone "%s"\n' % ext(obj.name, ""))
                         parameters = ''
-                        for key in obj.keys():
+                        for key, value in obj.items():
+                            if type(value) != str:
+                                continue
                             parameters += key
-                            if obj[key]:
-                                parameters += '=' + obj[key]
+                            if value:
+                                parameters += '=' + value
                             parameters += ';'
                         if parameters:
                             f.write(tab * (level + 1) + '{parameters "%s"}\n' % parameters)
@@ -159,12 +161,15 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                                 meshes[obj.data]['obj'] = obj
                             f.write(tab * (level + 1) + '{VolumeView "%s"' % ext(obj.data.name, ".ply"))
                             parameters = ''
-                            for key in obj.data.keys():
-                                if key != 'volume':
-                                    parameters += '\n%s{%s' % (tab * (level + 2), key)
-                                    if obj.data[key]:
-                                        parameters += ' ' + obj.data[key]
-                                    parameters += '}'
+                            for key, value in obj.data.items():
+                                if key == 'volume':
+                                    continue
+                                if type(value) != str:
+                                    continue
+                                parameters += '\n%s{%s' % (tab * (level + 2), key)
+                                if value:
+                                    parameters += ' ' + value
+                                parameters += '}'
                             if parameters:
                                 f.write('%s\n%s' % (parameters, tab * (level + 1)))
                             f.write('}\n')
@@ -298,14 +303,13 @@ def export(dir, operator, apply_unit_scale, global_matrix):
             # Force Blender to calculate necessary geometric data before accessing it
             mesh.calc_loop_triangles()
             mesh.calc_smooth_groups()
-            mesh.calc_tangents()
             
             loop_tris = mesh.loop_triangles
             edges_count = len(loop_tris) * 3
             
             # Limit enforced by standard 16-bit unsigned integer index buffers
             if edges_count > 0xffff: 
-                raise Exception(f"Mesh '{mesh.name}'s edges count ({edges_count}) exceeds the limit {0xffff}")
+                raise Exception(f"Mesh '{mesh.name}' edges count ({edges_count}) exceeds the limit {0xffff}")
 
             vertices = mesh.vertices
             coords = [vertex.co * unit_scale for vertex in vertices]
@@ -317,7 +321,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                 if 'volume' not in mesh.keys():
                     vertices_count = len(vertices)
                     if vertices_count > 0xffff: 
-                        raise Exception(f"Mesh '{mesh.name}''s vertices count ({vertices_count}) exceeds the limit {0xffff}")
+                        raise Exception(f"Mesh '{mesh.name}' vertices count ({vertices_count}) exceeds the limit {0xffff}")
 
                     with open(path.join(dir, ext(mesh.name, '.vol')), 'w+b') as f:
                         f.write(b'EVLM') 
@@ -339,11 +343,14 @@ def export(dir, operator, apply_unit_scale, global_matrix):
 
             # Binary Export: Visual render geometry (EPLY format)
             if meshes[mesh]['mesh']:
+                try:
+                    mesh.calc_tangents()
+                except:
+                    raise Exception(f"Mesh '{mesh.name}' has no UV layers")
+
                 loops_count = len(mesh.loops)
                 if loops_count > 0xffff: 
-                    raise Exception(f"Mesh '{mesh.name}'s loops/UVs count ({loops_count}) exceeds the limit {0xffff}")
-                if not mesh.uv_layers.active: 
-                    raise Exception(f"Mesh '{mesh.name} has no UV layers")
+                    raise Exception(f"Mesh '{mesh.name}' loops/UVs count ({loops_count}) exceeds the limit {0xffff}")
                 if not mesh.materials: 
                     raise Exception(f"Mesh '{mesh.name}' has no materials")
                 
@@ -353,7 +360,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                 
                 # Max 254 vertex groups supported due to 8-bit bone indexing limits in the hardware shader
                 if bones_count > 0xfe: 
-                    raise Exception(f"Mesh '{mesh.name}'s vertex groups count ({bones_count}) exceeds the limit {0xfe}")
+                    raise Exception(f"Mesh '{mesh.name}' vertex groups count ({bones_count}) exceeds the limit {0xfe}")
 
                 with open(path.join(dir, ext(mesh.name, '.ply')), 'w+b') as f:
                     f.write(b'EPLY')
@@ -442,7 +449,7 @@ def export(dir, operator, apply_unit_scale, global_matrix):
                         f.write(pack_fff(*loop.normal))
                         uv = uvs[loop.index]
                         
-                        # 1-uv[1] flips the V coordinate from Blender's OpenGL space (bottom-left origin) 
+                        # 1-uv[1] flips the V coordinate from Blender OpenGL space (bottom-left origin) 
                         # to DirectX space (top-left origin).
                         f.write(pack_ff(uv[0], 1 - uv[1]))
                         f.write(pack_fff(*loop.tangent))
